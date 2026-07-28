@@ -8,7 +8,7 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 // ========================================
-// KONEKSI MONGODB - PAKAI CONNECTION STRING ANDA!
+// KONEKSI MONGODB
 // ========================================
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://polsekbusaw:1234567890Aa@cluster0.qimud9r.mongodb.net/polsek_reports';
 
@@ -97,7 +97,7 @@ const ReportSchema = new mongoose.Schema({
 const Report = mongoose.model('Report', ReportSchema);
 
 // ========================================
-// TEMPLATES (Singkat)
+// TEMPLATES
 // ========================================
 const TEMPLATES = {
   karhutla: {
@@ -272,44 +272,195 @@ app.get('/api/templates/:jenis', (req, res) => {
   res.json(template);
 });
 
-// AI ENHANCE (sederhana)
+// ========================================
+// ========================================
+// 🤖 AI ENHANCE DENGAN GEMINI API
+// ========================================
+// ========================================
 app.post('/api/ai/enhance', async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, jenisLaporan } = req.body;
+    
     if (!text || text.trim().length < 5) {
-      return res.json({ enhanced: text, message: 'Teks terlalu pendek' });
+      return res.json({ 
+        enhanced: text,
+        message: 'Teks terlalu pendek untuk dianalisis'
+      });
     }
 
-    let result = text;
-    const fixes = {
-      'utk': 'untuk', 'kpd': 'kepada', 'yg': 'yang', 'dgn': 'dengan',
-      'tdk': 'tidak', 'sdh': 'sudah', 'wib': 'WIB', 's/d': 'sampai dengan',
-      '&': 'dan', 'dpt': 'dapat', 'bs': 'bisa', 'jgn': 'jangan',
-      'msh': 'masih', 'krn': 'karena', 'klo': 'kalau', 'jg': 'juga', 'dri': 'dari'
-    };
-    for (const [key, value] of Object.entries(fixes)) {
-      result = result.replace(new RegExp(`\\b${key}\\b`, 'gi'), value);
-    }
-    result = result.replace(/(^|\.\s+)([a-z])/g, (m, p1, p2) => p1 + p2.toUpperCase());
+    // Ambil API Key dari environment variable
+    const apiKey = process.env.GEMINI_API_KEY;
     
-    res.json({ enhanced: result, message: '✅ Diperbaiki' });
+    // ========================================
+    // JIKA ADA GEMINI API KEY, PAKAI AI
+    // ========================================
+    if (apiKey && apiKey !== 'AQ.Ab8RN6Ih_mEpbKCnkMb2aT87T5wcTXLbZqEqjmw_JdMOjiGR4w') {
+      try {
+        const prompt = `
+Anda adalah asisten AI untuk membantu memperbaiki kalimat laporan kepolisian di Indonesia.
+Perbaiki kalimat berikut menjadi lebih profesional, formal, dan mudah dipahami.
+
+Jenis Laporan: ${jenisLaporan || 'Umum'}
+
+Teks asli:
+"${text}"
+
+Aturan:
+1. Perbaiki tata bahasa dan ejaan yang salah
+2. Buat kalimat lebih formal dan profesional (sesuai standar kepolisian)
+3. Gunakan bahasa Indonesia yang baku dan mudah dipahami
+4. Pertahankan makna asli dari teks
+5. Jika ada singkatan (utk, kpd, dgn, dll), tulis dengan lengkap
+6. Perbaiki tanda baca dan kapitalisasi
+7. JANGAN tambahkan kalimat baru, hanya perbaiki yang ada
+
+Hasil perbaikan (hanya teks hasil perbaikan, tanpa penjelasan tambahan):
+`;
+
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{ text: prompt }]
+            }],
+            generationConfig: {
+              temperature: 0.3,
+              maxOutputTokens: 500,
+            }
+          })
+        });
+
+        const data = await response.json();
+        
+        if (data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+          const enhanced = data.candidates[0].content.parts[0].text.trim();
+          return res.json({ 
+            enhanced: enhanced,
+            message: '✅ Diperbaiki dengan AI Gemini',
+            aiUsed: true
+          });
+        } else {
+          console.log('Gemini response error:', data);
+          // Fallback ke perbaikan sederhana
+          const enhanced = simpleEnhance(text);
+          return res.json({ 
+            enhanced: enhanced,
+            message: '⚠️ AI error, pakai perbaikan sederhana',
+            aiUsed: false
+          });
+        }
+      } catch (aiError) {
+        console.error('AI Error:', aiError.message);
+        // Fallback ke perbaikan sederhana
+        const enhanced = simpleEnhance(text);
+        return res.json({ 
+          enhanced: enhanced,
+          message: '⚠️ AI error, pakai perbaikan sederhana',
+          aiUsed: false
+        });
+      }
+    }
+    
+    // ========================================
+    // TANPA GEMINI API KEY - PAKAI FALLBACK
+    // ========================================
+    const enhanced = simpleEnhance(text);
+    res.json({ 
+      enhanced: enhanced,
+      message: 'ℹ️ Perbaikan sederhana (AI tidak aktif)',
+      aiUsed: false
+    });
+
   } catch (error) {
-    res.json({ enhanced: req.body.text, message: 'Gagal perbaiki' });
+    console.error('Enhance Error:', error);
+    const enhanced = simpleEnhance(req.body.text);
+    res.json({ 
+      enhanced: enhanced,
+      message: '⚠️ Terjadi error, pakai perbaikan sederhana'
+    });
   }
 });
 
+// ========================================
+// SIMPLE ENHANCE (FALLBACK TANPA AI)
+// ========================================
+function simpleEnhance(text) {
+  let result = text;
+  
+  const fixes = {
+    'utk': 'untuk',
+    'kpd': 'kepada',
+    'yg': 'yang',
+    'dgn': 'dengan',
+    'tdk': 'tidak',
+    'sdh': 'sudah',
+    'wib': 'WIB',
+    's/d': 'sampai dengan',
+    '&': 'dan',
+    'dpt': 'dapat',
+    'bs': 'bisa',
+    'jgn': 'jangan',
+    'msh': 'masih',
+    'krn': 'karena',
+    'klo': 'kalau',
+    'jg': 'juga',
+    'dri': 'dari',
+    'utk': 'untuk',
+    'pda': 'pada',
+    'klo': 'kalau',
+    'sm': 'sama',
+    'aja': 'saja',
+    'bgmn': 'bagaimana',
+    'knp': 'kenapa',
+    'spt': 'seperti',
+    'tp': 'tetapi',
+    'dng': 'dengan',
+    'mrh': 'marah',
+    'bsk': 'besok',
+    'kmrn': 'kemarin',
+    'skrg': 'sekarang',
+    'trs': 'terus',
+    'udh': 'udah',
+    'ud': 'sudah',
+    'd': 'di',
+    'y': 'yang'
+  };
+
+  for (const [key, value] of Object.entries(fixes)) {
+    result = result.replace(new RegExp(`\\b${key}\\b`, 'gi'), value);
+  }
+
+  // Kapitalisasi awal kalimat
+  result = result.replace(/(^|\.\s+)([a-z])/g, (match, p1, p2) => p1 + p2.toUpperCase());
+  
+  // Perbaiki spasi
+  result = result.replace(/\s+\./g, '.');
+  result = result.replace(/\.+/g, '.');
+  result = result.replace(/\s{2,}/g, ' ');
+
+  return result;
+}
+
+// ========================================
 // ROOT
+// ========================================
 app.get('/', (req, res) => {
   res.json({
     name: 'Polsek Report API',
     version: '2.0',
     status: 'running',
-    mongodb: mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Disconnected ❌'
+    mongodb: mongoose.connection.readyState === 1 ? 'Connected ✅' : 'Disconnected ❌',
+    ai: process.env.GEMINI_API_KEY ? 'Gemini AI Active ✅' : 'Simple Enhancer Only ⚠️'
   });
 });
 
-// START
+// ========================================
+// START SERVER
+// ========================================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🤖 AI Status: ${process.env.GEMINI_API_KEY ? 'Gemini AI Active ✅' : 'Simple Enhancer Only ⚠️'}`);
+  console.log('========================================');
 });
